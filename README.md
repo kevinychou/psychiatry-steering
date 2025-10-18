@@ -22,5 +22,6 @@ This pilot yielded the following preliminary results:
 
 - 81 Paranoia prompts were created varying from mild, moderate, to severe suspicions, with ""threat-attribution", "reality-testing", "hypervigilance", "self-referential", and "normal-uncertainty" as labels.
 - [Steering Results](steering_results_deepseek-r1-distill-qwen-14b.pdf) (n=1 example) demonstrated significant differences in steering across paranoia labels; wiith positive steering significantly affecting threat attribution, and negative steering significantly reducing reality testing. 
-![alt text](image.png)
+
+![alt text](results/figures/image.png)
 
