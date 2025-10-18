@@ -3,6 +3,12 @@ import argparse
 import dotenv
 dotenv.load_dotenv("../.env")
 
+import sys
+from pathlib import Path
+repo_root = Path(__file__).resolve().parents[1]
+if str(repo_root) not in sys.path:
+    sys.path.insert(0, str(repo_root))
+
 from transformers import AutoTokenizer
 import torch
 import re
@@ -59,7 +65,12 @@ def update_mean_vectors(mean_vectors, layer_outputs, label_positions, index):
         overall_vectors = layer_outputs[:, min_pos:max_pos].mean(dim=1)
         current_count = mean_vectors['overall']['count']
         current_mean = mean_vectors['overall']['mean']
-        mean_vectors['overall']['mean'] = current_mean + (overall_vectors - current_mean) / (current_count + 1)
+        
+        # Initialize on first sample or use incremental update
+        if current_count == 0:
+            mean_vectors['overall']['mean'] = overall_vectors
+        else:
+            mean_vectors['overall']['mean'] = current_mean + (overall_vectors - current_mean) / (current_count + 1)
         mean_vectors['overall']['count'] += 1
 
         if torch.isnan(mean_vectors['overall']['mean']).any():
@@ -87,7 +98,12 @@ def update_mean_vectors(mean_vectors, layer_outputs, label_positions, index):
             
             current_count = mean_vectors[label]['count']
             current_mean = mean_vectors[label]['mean']
-            mean_vectors[label]['mean'] = current_mean + (vectors - current_mean) / (current_count + 1)
+            
+            # Initialize on first sample or use incremental update
+            if current_count == 0:
+                mean_vectors[label]['mean'] = vectors
+            else:
+                mean_vectors[label]['mean'] = current_mean + (vectors - current_mean) / (current_count + 1)
             mean_vectors[label]['count'] += 1
 
 # %% Main execution

@@ -1,5 +1,8 @@
 import dotenv
-dotenv.load_dotenv("../.env")
+from pathlib import Path
+
+env_path = Path(__file__).resolve().parent.parent / ".env"
+dotenv.load_dotenv(env_path)
 
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
@@ -249,17 +252,20 @@ def load_model_and_vectors(device="cuda:0", load_in_8bit=False, compute_features
     # Get model identifier for file naming
     model_id = model_name.split('/')[-1].lower()
     
-    # go into directory of this file
-    vector_path = f"../train-steering-vectors/results/vars/mean_vectors_{model_id}.pt"
-    if os.path.exists(vector_path):
-        mean_vectors_dict = torch.load(vector_path)
+    # Build path relative to repo root (utils/ is one level down from root)
+    utils_dir = Path(__file__).resolve().parent
+    repo_root = utils_dir.parent
+    vector_path = repo_root / "results" / "vars" / f"mean_vectors_{model_id}.pt"
+    
+    if vector_path.exists():
+        mean_vectors_dict = torch.load(str(vector_path))
 
         if compute_features:
             # Compute feature vectors by subtracting overall mean
             feature_vectors = {}
             feature_vectors["overall"] = mean_vectors_dict["overall"]['mean']
             
-            for label in ["initializing", "deduction", "adding-knowledge", "example-testing", "uncertainty-estimation", "backtracking"]:
+            for label in ["normal-uncertainty", "self-referential", "hypervigilance", "reality-testing", "threat-attribution"]:
 
                 if label != 'overall':
                     feature_vectors[label] = mean_vectors_dict[label]['mean'] - mean_vectors_dict["overall"]['mean']
@@ -296,25 +302,21 @@ def custom_generate_steering(model, tokenizer, input_ids, max_new_tokens, label,
         steer_positive: If True, steer towards the label, if False steer away
     """
     model_layers = model.model.layers
+    
+    # Prepare generation args (nnsight parser needs simple with statement)
+    gen_kwargs = {
+        "input_ids": input_ids, 
+        "attention_mask": (input_ids != tokenizer.pad_token_id).long()
+    }
 
-    with model.generate(
-        {
-            "input_ids": input_ids, 
-            "attention_mask": (input_ids != tokenizer.pad_token_id).long()
-        },
-        max_new_tokens=max_new_tokens,
-        pad_token_id=tokenizer.pad_token_id,
-    ) as tracer:
-        # Apply .all() to model to ensure interventions work across all generations
-        model_layers.all()
-
-        if feature_vectors is not None:       
+    with model.generate(gen_kwargs, max_new_tokens=max_new_tokens, pad_token_id=tokenizer.pad_token_id) as tracer:
+        if feature_vectors is not None:  
+            # Apply .all() to model to ensure interventions work across all generations
+            model_layers.all()
             vector_layer = steering_config[label]["vector_layer"]
             pos_layers = steering_config[label]["pos_layers"]
             neg_layers = steering_config[label]["neg_layers"]
             coefficient = steering_config[label]["pos_coefficient"] if steer_positive else steering_config[label]["neg_coefficient"]
-     
-
             if steer_positive:
                 feature_vector = feature_vectors[label][vector_layer].to("cuda").to(torch.bfloat16)
                 for layer_idx in pos_layers:         
@@ -337,12 +339,11 @@ def process_batch_annotations(thinking_processes):
         Please split the following reasoning chain of an LLM into annotated parts using labels and the following format ["label"]...["end-section"]. A sentence should be split into multiple parts if it incorporates multiple behaviours indicated by the labels.
 
         Available labels:
-        0. initializing -> The model is rephrasing the given task and states initial thoughts.
-        1. deduction -> The model is performing a deduction step based on its current approach and assumptions.
-        2. adding-knowledge -> The model is enriching the current approach with recalled facts.
-        3. example-testing -> The model generates examples to test its current approach.
-        4. uncertainty-estimation -> The model is stating its own uncertainty.
-        5. backtracking -> The model decides to change its approach.
+        0. threat-attribution -> Attributing hostile or malicious intent to others' actions
+        1. reality-testing -> Questioning whether perceptions match reality or considering alternative explanations
+        2. hypervigilance -> Planning to monitor, observe, or gather evidence about others
+        3. self-referential -> Interpreting neutral events as personally directed or significant
+        4. normal-uncertainty -> General problem-solving without pathological suspicion
 
         The reasoning chain to analyze:
         {thinking}
@@ -369,18 +370,21 @@ def process_saved_responses_batch(responses_list, tokenizer, model):
     
     # Process the inputs through the model to get activations
     layer_outputs = []
-    with model.trace(
-        {
-            "input_ids": tokenized_responses, 
-            "attention_mask": (tokenized_responses != tokenizer.pad_token_id).long()
-        }
-    ) as tracer:
-        
+    with model.trace({"input_ids": tokenized_responses, "attention_mask": (tokenized_responses != tokenizer.pad_token_id).long()}) as tracer:
         # Capture layer outputs
         for layer_idx in range(model.config.num_hidden_layers):
             layer_outputs.append(model.model.layers[layer_idx].output[0].save())
     
-    layer_outputs = [x.value.cpu().detach().to(torch.float32) for x in layer_outputs]
+    # After exiting the trace context, extract values and convert to tensors
+    # Check if items have .value attribute (proxy objects) or are already tensors
+    processed_outputs = []
+    for x in layer_outputs:
+        if hasattr(x, 'value'):
+            processed_outputs.append(x.value.cpu().detach().to(torch.float32))
+        else:
+            # Already a tensor
+            processed_outputs.append(x.cpu().detach().to(torch.float32))
+    layer_outputs = processed_outputs
 
     batch_layer_outputs = []
     
@@ -401,10 +405,10 @@ def process_saved_responses_batch(responses_list, tokenizer, model):
 
 steering_config = {
     "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B": {
-        "backtracking": {"vector_layer": 17, "pos_layers": [17], "neg_layers": [17], "pos_coefficient": 1, "neg_coefficient": 1},
-        "uncertainty-estimation": {"vector_layer": 18, "pos_layers": [18], "neg_layers": [18], "pos_coefficient": 1, "neg_coefficient": 1},
-        "example-testing": {"vector_layer": 15, "pos_layers": [15], "neg_layers": [15], "pos_coefficient": 1, "neg_coefficient": 1},
-        "adding-knowledge": {"vector_layer": 18, "pos_layers": [18], "neg_layers": [18], "pos_coefficient": 1, "neg_coefficient": 1},
+        "threat-attribution": {"vector_layer": 17, "pos_layers": [17], "neg_layers": [17], "pos_coefficient": 1, "neg_coefficient": 1},
+        "reality-testing": {"vector_layer": 18, "pos_layers": [18], "neg_layers": [18], "pos_coefficient": 1, "neg_coefficient": 1},
+        "hypervigilance": {"vector_layer": 15, "pos_layers": [15], "neg_layers": [15], "pos_coefficient": 1, "neg_coefficient": 1},
+        "self-referential": {"vector_layer": 17, "pos_layers": [17], "neg_layers": [17], "pos_coefficient": 1, "neg_coefficient": 1}    
     },
     "deepseek-ai/DeepSeek-R1-Distill-Llama-8B": {
         "backtracking": {"vector_layer": 12, "pos_layers": [12], "neg_layers": [12], "pos_coefficient": 1, "neg_coefficient": 1},
