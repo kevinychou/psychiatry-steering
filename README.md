@@ -7,7 +7,7 @@ We provide an interactive [Demo Colab](https://colab.research.google.com/drive/1
 
 ## Overview
 
-This project was created as a quick extension for ARENA - with the goal of training steering vectors in a psychiatric context.
+This project was created as a quick extension for ARENA/ARBOx - with the goal of training steering vectors in a psychiatric context.
 
 The main goals were the following:
 - Demonstrate ability to use existing repositories and amend to different experimental paradigms
